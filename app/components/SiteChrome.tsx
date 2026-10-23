@@ -35,15 +35,38 @@ export default function SiteChrome({
         <div className="site-nav-inner">
           <a
             className="site-brand"
-            href={ROOT + '/#home'}
+            href={`${ROOT}/#home`}
             aria-label="Auto AI Expo homepage"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              flexShrink: 0,
+              width: '210px',
+              minWidth: '210px',
+              overflow: 'visible',
+            }}
           >
-            <img src={LOGO} alt="Auto AI Expo" />
+            <img
+              src={LOGO}
+              alt="Auto AI Expo"
+              width={200}
+              height={60}
+              style={{
+                display: 'block',
+                visibility: 'visible',
+                opacity: 1,
+                width: '200px',
+                height: '60px',
+                maxWidth: 'none',
+                objectFit: 'contain',
+                objectPosition: 'left center',
+              }}
+            />
           </a>
 
           <nav className="site-nav-links" aria-label="Main navigation">
             {links.map(([label, anchor]) => (
-              <a key={label} href={ROOT + '/' + anchor}>
+              <a key={label} href={`${ROOT}/${anchor}`}>
                 {label}
               </a>
             ))}
@@ -65,7 +88,7 @@ export default function SiteChrome({
             {links.map(([label, anchor]) => (
               <a
                 key={label}
-                href={ROOT + '/' + anchor}
+                href={`${ROOT}/${anchor}`}
                 onClick={() => setMenuOpen(false)}
               >
                 {label}
@@ -80,8 +103,32 @@ export default function SiteChrome({
       <footer className="site-footer">
         <div className="site-footer-inner">
           <div className="site-footer-top">
-            <a href={ROOT + '/'} aria-label="Auto AI Expo homepage">
-              <img src={LOGO} alt="Auto AI Expo Logo" />
+            <a
+              href={ROOT}
+              aria-label="Auto AI Expo homepage"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                flexShrink: 0,
+                minWidth: '220px',
+              }}
+            >
+              <img
+                src={LOGO}
+                alt="Auto AI Expo Logo"
+                width={220}
+                height={80}
+                style={{
+                  display: 'block',
+                  visibility: 'visible',
+                  opacity: 1,
+                  width: '220px',
+                  height: '80px',
+                  maxWidth: '100%',
+                  objectFit: 'contain',
+                  objectPosition: 'left center',
+                }}
+              />
             </a>
 
             <div>
