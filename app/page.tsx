@@ -41,7 +41,7 @@ export default function RegistrationPage() {
 
   <br /><br />
 
-  By ticking the checkbox below, you confirm that you have read and
+  By ticking the checkbox above, you confirm that you have read and
   understood this notice and consent to the collection and processing of
   your personal data for the purposes described above.
 </span>
