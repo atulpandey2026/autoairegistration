@@ -93,3 +93,136 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     if (clean(body.website, 200)) return NextResponse.json({ error: 'Unable to process registration.' }, { status: 400 });
     if (body.consent !== true) return NextResponse.json({ error: 'Please accept the registration terms.' }, { status: 400 });
+
+    const contact_name = clean(body.contact_name, 150);
+    const email = clean(body.email, 190).toLowerCase();
+    const phone = clean(body.phone, 35);
+    const company = clean(body.company, 190);
+    const designation = clean(body.designation, 150);
+    const gstin = clean(body.gstin, 20);
+    const billing_address = clean(body.billing_address, 500);
+    const count = Number(body.delegate_count);
+
+    if (!contact_name || !emailOk(email) || !phone || !company) {
+      return NextResponse.json({ error: 'Please provide a valid name, work email, mobile number and company.' }, { status: 400 });
+    }
+    if (!Number.isInteger(count) || count < 1 || count > 100) {
+      return NextResponse.json({ error: 'Delegate count must be between 1 and 100.' }, { status: 400 });
+    }
+    if (!Array.isArray(body.delegates) || body.delegates.length !== count) {
+      return NextResponse.json({ error: 'Please complete the details for every delegate.' }, { status: 400 });
+    }
+
+    const delegates = body.delegates.map((d: any) => ({
+      name: clean(d.name, 150),
+      email: clean(d.email, 190).toLowerCase(),
+      phone: clean(d.phone, 35),
+      designation: clean(d.designation, 150),
+      company: clean(d.company, 190),
+    }));
+
+    if (delegates.some((d: any) => !d.name || !emailOk(d.email) || !d.company)) {
+      return NextResponse.json({ error: 'Every delegate needs a name, valid email and company.' }, { status: 400 });
+    }
+    const allEmails = delegates.map((d: any) => d.email);
+    if (new Set(allEmails).size !== allEmails.length) {
+      return NextResponse.json({ error: 'Each delegate must have a different email address.' }, { status: 400 });
+    }
+
+    const pricing = calculatePrice(count);
+    conn = await pool.getConnection();
+
+    // A per-year sequence row serializes number allocation so simultaneous registrations
+    // cannot receive the same reference. The table is created automatically if needed.
+    await conn.execute(`CREATE TABLE IF NOT EXISTS registration_sequences (
+      year INT NOT NULL PRIMARY KEY,
+      last_number BIGINT UNSIGNED NOT NULL DEFAULT 0
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
+    await conn.beginTransaction();
+    await conn.execute('INSERT IGNORE INTO registration_sequences (year, last_number) VALUES (?, 0)', [EVENT_YEAR]);
+    const [sequenceRows]: any = await conn.execute('SELECT last_number FROM registration_sequences WHERE year=? FOR UPDATE', [EVENT_YEAR]);
+    const [existingCodeRows]: any = await conn.execute('SELECT registration_code FROM registrations WHERE registration_code LIKE ? FOR UPDATE', [`AAIE-${EVENT_YEAR}-%`]);
+    const existingMax = (existingCodeRows as any[]).reduce((max: number, row: any) => {
+      const match = String(row.registration_code).match(new RegExp(`^AAIE-${EVENT_YEAR}-(\\d+)$`));
+      return match ? Math.max(max, Number(match[1])) : max;
+    }, 0);
+    const nextNumber = Math.max(Number(sequenceRows[0]?.last_number || 0), existingMax) + 1;
+    const code = `AAIE-${EVENT_YEAR}-${String(nextNumber).padStart(4, '0')}`;
+    await conn.execute('UPDATE registration_sequences SET last_number=? WHERE year=?', [nextNumber, EVENT_YEAR]);
+
+    const [ins]: any = await conn.execute(
+      `INSERT INTO registrations (registration_code,contact_name,email,phone,company,designation,gstin,billing_address,pass_name,delegate_count,unit_price,subtotal,gst_rate,gst_amount,total) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [code, contact_name, email, phone, company, designation, gstin, billing_address, pricing.category, count, pricing.unit, pricing.subtotal, pricing.gstRate, pricing.gst, pricing.total],
+    );
+    const registrationId = ins.insertId;
+    for (const d of delegates) {
+      await conn.execute(
+        'INSERT INTO delegates (registration_id,full_name,email,phone,designation,company,pass_token) VALUES (?,?,?,?,?,?,?)',
+        [registrationId, d.name, d.email, d.phone, d.designation, d.company, randomUUID().replaceAll('-', '')],
+      );
+    }
+
+    const delegateRows = delegates.map((d: any, i: number) => `
+      <tr>
+        <td style="padding:9px 8px;border-bottom:1px solid #eeeeee;color:#66666f">${i + 1}</td>
+        <td style="padding:9px 8px;border-bottom:1px solid #eeeeee;color:#111115">${escapeHtml(d.name)}</td>
+        <td style="padding:9px 8px;border-bottom:1px solid #eeeeee;color:#111115;word-break:break-word">${escapeHtml(d.email)}</td>
+        <td style="padding:9px 8px;border-bottom:1px solid #eeeeee;color:#111115">${escapeHtml(d.company)}</td>
+      </tr>`).join('');
+
+    const emailData = {
+      contactName: contact_name,
+      company,
+      code,
+      passName: pricing.category,
+      count,
+      subtotal: pricing.subtotal,
+      gstRate: pricing.gstRate,
+      gst: pricing.gst,
+      total: pricing.total,
+      delegateRows,
+    };
+    const contactHtml = buildRegistrationEmail(emailData);
+    const adminHtml = buildRegistrationEmail({ ...emailData, adminNotification: true });
+
+    const [contactMail]: any = await conn.execute(
+      'INSERT INTO email_queue (recipient,subject,body) VALUES (?,?,?)',
+      [email, 'Auto AI Expo 2027 — Registration received', contactHtml],
+    );
+    const mailIds = [Number(contactMail.insertId)];
+    if (process.env.ADMIN_NOTIFICATION_EMAIL) {
+      const [adminMail]: any = await conn.execute(
+        'INSERT INTO email_queue (recipient,subject,body) VALUES (?,?,?)',
+        [process.env.ADMIN_NOTIFICATION_EMAIL, `New Auto AI Expo 2027 registration — ${code}`, adminHtml],
+      );
+      mailIds.push(Number(adminMail.insertId));
+    }
+
+    await conn.commit();
+    conn.release();
+    conn = null;
+
+    // Send immediately; queued records remain available for retry if SMTP fails.
+    for (const mailId of mailIds) {
+      const [mailRows]: any = await pool.execute('SELECT id,recipient,subject,body FROM email_queue WHERE id=?', [mailId]);
+      const row = mailRows[0];
+      if (!row) continue;
+      try {
+        await sendMail(row.recipient, row.subject, row.body);
+        await pool.execute('UPDATE email_queue SET status="Sent",sent_at=NOW(),attempts=attempts+1,last_error=NULL WHERE id=?', [row.id]);
+      } catch (e) {
+        await pool.execute('UPDATE email_queue SET attempts=attempts+1,last_error=? WHERE id=?', [String(e).slice(0, 250), row.id]);
+      }
+    }
+
+    return NextResponse.json({ ok: true, registrationCode: code }, { status: 201 });
+  } catch (e: any) {
+    if (conn) {
+      try { await conn.rollback(); } catch { /* Ignore rollback errors. */ }
+      conn.release();
+    }
+    console.error('Registration submission failed:', e?.message || e);
+    return NextResponse.json({ error: 'We could not save your registration. Please try again later or contact the event team.' }, { status: 500 });
+  }
+}
