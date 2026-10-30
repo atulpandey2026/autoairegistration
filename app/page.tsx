@@ -25,13 +25,7 @@ export default function RegistrationPage() {
 Your personal data may be shared with authorised event associate partners strictly for legitimate event-related purposes and in accordance with applicable data protection laws. We will implement reasonable security measures to protect your information, restrict access to authorised personnel, and retain your data only for as long as necessary to fulfil the stated purposes or meet applicable legal requirements.
 
 By ticking the checkbox below, you confirm that you have read and understood this notice and consent to the collection and processing of your personal data for the purposes described above.</span>
- 
- 
- 
- 
- 
- 
- 
+  
  </label><div className="honeypot" aria-hidden="true"><label>Leave this field empty<input name="website" tabIndex={-1} autoComplete="off"/></label></div>{error&&<div className="error">{error}</div>}<div className="submit-line"><button className="submit" disabled={busy}>{busy?'Submitting…':'Submit registration →'}</button><span>Our team will connect with you regarding further details and payment terms.</span></div></section>
  </form></main>;
 }
