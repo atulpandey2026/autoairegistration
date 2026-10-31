@@ -44,6 +44,7 @@ export default function AdminPage() {
   const [busy, setBusy] = useState(true);
   const [expanded, setExpanded] = useState<number[]>([]);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [saving, setSaving] = useState<number | null>(null);
 
   async function load() {
     setBusy(true);
@@ -72,6 +73,7 @@ export default function AdminPage() {
   async function update(row: Row, status: string, payment_status: string) {
     setError('');
     setNotice('');
+    setSaving(row.id);
     try {
       const r = await fetch('/api/admin/registrations', {
         method: 'PATCH',
@@ -85,6 +87,9 @@ export default function AdminPage() {
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Update failed.');
+      throw e;
+    } finally {
+      setSaving(null);
     }
   }
 
@@ -164,16 +169,16 @@ export default function AdminPage() {
       {busy ? <p>Loading registrations…</p> : <div className="table-scroll"><table><thead><tr><th>Registration</th><th>Primary contact</th><th>Company</th><th>Nominated delegates</th><th>Total</th><th>Registration status</th><th>Payment status</th><th>Update</th><th>Delete</th></tr></thead><tbody>
         {filtered.map(r => {
           const open = expanded.includes(r.id);
-          return <FragmentRow key={r.id} row={r} open={open} deleting={deleting} toggle={() => setExpanded(old => open ? old.filter(x => x !== r.id) : [...old, r.id])} update={update} deleteRegistration={deleteRegistration} deleteDelegate={deleteDelegate} />;
+          return <FragmentRow key={r.id} row={r} open={open} deleting={deleting} toggle={() => setExpanded(old => open ? old.filter(x => x !== r.id) : [...old, r.id])} saving={saving === r.id} update={update} deleteRegistration={deleteRegistration} deleteDelegate={deleteDelegate} />;
         })}
       </tbody></table>{filtered.length === 0 && <p className="empty">No registrations found.</p>}</div>}
     </section>
-    <p className="admin-note">CSV export includes one primary-contact row and one row per nominated delegate. Primary contacts are not automatically counted as nominees unless they were entered as delegates. The dashboard displays the latest 500 registrations. Changing either status sends an email to the primary contact when the value actually changes. Deleting a registration or nominee sends no email.</p>
+    <p className="admin-note">CSV export includes one primary-contact row and one row per nominated delegate. Primary contacts are not automatically counted as nominees unless they were entered as delegates. The dashboard displays the latest 500 registrations. Status selections are not saved or emailed until you click Save. Only saved changes trigger notifications. Deleting a registration or nominee sends no email.</p>
     <style jsx global>{`.admin-notice{background:#eef9f1;border:1px solid #c9ead2;color:#176b35;padding:11px 13px;border-radius:7px;margin:12px 0;font-size:12px}.delete-button{border:1px solid #f0c5c0;background:#fff7f6;color:#a12626;border-radius:7px;padding:7px 10px;font-size:11px;font-weight:700;white-space:nowrap}.delete-button:hover{background:#fff0ee;border-color:#ee4123}.delete-button:disabled{opacity:.55;cursor:wait}.nominee-table .delete-button{padding:6px 8px}`}</style>
   </main>;
 }
 
-function FragmentRow({ row: r, open, toggle, update, deleteRegistration, deleteDelegate, deleting }: {
+function FragmentRow({ row: r, open, toggle, update, deleteRegistration, deleteDelegate, deleting, saving }: {
   row: Row;
   open: boolean;
   toggle: () => void;
@@ -181,7 +186,27 @@ function FragmentRow({ row: r, open, toggle, update, deleteRegistration, deleteD
   deleteRegistration: (r: Row) => Promise<void>;
   deleteDelegate: (r: Row, d: Delegate) => Promise<void>;
   deleting: string | null;
+  saving: boolean;
 }) {
+  const [draftStatus, setDraftStatus] = useState(r.status);
+  const [draftPaymentStatus, setDraftPaymentStatus] = useState(r.payment_status);
+  const [localSaving, setLocalSaving] = useState(false);
+  useEffect(() => {
+    setDraftStatus(r.status);
+    setDraftPaymentStatus(r.payment_status);
+  }, [r.status, r.payment_status]);
+  const changed = draftStatus !== r.status || draftPaymentStatus !== r.payment_status;
+  async function save() {
+    if (!changed || saving || localSaving) return;
+    setLocalSaving(true);
+    try {
+      await update(r, draftStatus, draftPaymentStatus);
+    } catch {
+      // Parent displays the error; retain unsaved selections for retry.
+    } finally {
+      setLocalSaving(false);
+    }
+  }
   return <>
     <tr>
       <td><strong>{r.registration_code}</strong><small>{new Date(r.created_at).toLocaleString()}</small></td>
@@ -189,9 +214,9 @@ function FragmentRow({ row: r, open, toggle, update, deleteRegistration, deleteD
       <td>{r.company}<small>{r.pass_name}</small></td>
       <td><button className="delegate-toggle" type="button" aria-expanded={open} onClick={toggle}>{r.delegate_count} registered · {r.delegates?.length || 0} saved {open ? '▲' : '▼'}<span>{open ? 'Hide nominee details' : 'View all nominee details'}</span></button></td>
       <td>{money(r.total)}<small>GST {money(r.gst_amount)}</small></td>
-      <td><select aria-label={`Registration status for ${r.registration_code}`} value={r.status} onChange={e => update(r, e.target.value, r.payment_status)}><option>Pending</option><option>Confirmed</option><option>Cancelled</option></select></td>
-      <td><select aria-label={`Payment status for ${r.registration_code}`} value={r.payment_status} onChange={e => update(r, r.status, e.target.value)}><option>Pending</option><option>Partially Paid</option><option>Paid</option><option>Refunded</option><option>Cancelled</option></select></td>
-      <td><button className="save-mini" onClick={() => update(r, r.status, r.payment_status)}>Save</button></td>
+      <td><select aria-label={`Registration status for ${r.registration_code}`} value={draftStatus} onChange={e => setDraftStatus(e.target.value)}><option>Pending</option><option>Confirmed</option><option>Cancelled</option></select></td>
+      <td><select aria-label={`Payment status for ${r.registration_code}`} value={draftPaymentStatus} onChange={e => setDraftPaymentStatus(e.target.value)}><option>Pending</option><option>Partially Paid</option><option>Paid</option><option>Refunded</option><option>Cancelled</option></select></td>
+      <td><button type="button" className="save-mini" disabled={!changed || saving || localSaving} onClick={save}>{saving || localSaving ? "Saving…" : "Save"}</button></td>
       <td><button className="delete-button" disabled={deleting === `registration-${r.id}`} onClick={() => deleteRegistration(r)}>{deleting === `registration-${r.id}` ? 'Deleting…' : 'Delete registration'}</button></td>
     </tr>
     {open && <tr className="nominee-row"><td colSpan={9}><div className="nominee-box"><h3>Nominated delegates · {r.registration_code}</h3>{r.delegates?.length ? <div className="nominee-table-wrap"><table className="nominee-table"><thead><tr><th>#</th><th>Full name</th><th>Email</th><th>Mobile</th><th>Designation</th><th>Company</th><th>Action</th></tr></thead><tbody>{r.delegates.map((d, i) => <tr key={d.id}><td>{i + 1}</td><td><strong>{d.full_name}</strong></td><td>{d.email}</td><td>{d.phone || '—'}</td><td>{d.designation || '—'}</td><td>{d.company}</td><td><button className="delete-button" disabled={deleting === `delegate-${d.id}`} onClick={() => deleteDelegate(r, d)}>{deleting === `delegate-${d.id}` ? 'Deleting…' : 'Delete nominee'}</button></td></tr>)}</tbody></table></div> : <p>No nominated delegate records were found for this registration. Check the database if the count is greater than zero.</p>}</div></td></tr>}
