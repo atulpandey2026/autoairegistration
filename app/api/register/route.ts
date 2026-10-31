@@ -1,8 +1,8 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse, after } from 'next/server';
 import { randomUUID } from 'node:crypto';
 import { pool } from '@/lib/db';
 import { calculatePrice } from '@/lib/pricing';
-import { escapeHtml } from '@/lib/mail';
+import { escapeHtml, sendMail } from '@/lib/mail';
 
 export const runtime = 'nodejs';
 
@@ -189,19 +189,52 @@ export async function POST(req: NextRequest) {
       'INSERT INTO email_queue (recipient,subject,body) VALUES (?,?,?)',
       [email, 'Auto AI Expo 2027 — Registration received', contactHtml],
     );
+    let adminMailId: number | null = null;
     if (process.env.ADMIN_NOTIFICATION_EMAIL) {
       const [adminMail]: any = await conn.execute(
         'INSERT INTO email_queue (recipient,subject,body) VALUES (?,?,?)',
         [process.env.ADMIN_NOTIFICATION_EMAIL, `New Auto AI Expo 2027 registration — ${code}`, adminHtml],
       );
+      adminMailId = Number(adminMail.insertId);
     }
 
     await conn.commit();
     conn.release();
     conn = null;
 
-    // Email records are committed to the queue. A separate scheduled worker
-    // sends them, so SMTP cannot delay the registration success response.
+    // Next.js 15 runs this after the response has been sent. SMTP does not
+    // delay the success page. Keep the email_queue rows as a recovery record.
+    const queuedEmails = [
+      { id: Number(contactMail.insertId), recipient: email, subject: 'Auto AI Expo 2027 — Registration received', html: contactHtml },
+      ...(adminMailId ? [{ id: adminMailId, recipient: process.env.ADMIN_NOTIFICATION_EMAIL!, subject: `New Auto AI Expo 2027 registration — ${code}`, html: adminHtml }] : []),
+    ];
+    after(async () => {
+      await Promise.allSettled(queuedEmails.map(async (job) => {
+        try {
+          // Claim only a still-pending email to avoid overlapping with the
+          // optional scheduled queue worker.
+          const [claim]: any = await pool.execute(
+            `UPDATE email_queue SET status='Failed', attempts=attempts+1,
+             last_error='Sending in progress' WHERE id=? AND status='Pending' AND attempts<3`,
+            [job.id],
+          );
+          if (claim.affectedRows !== 1) return;
+          await sendMail(job.recipient, job.subject, job.html);
+          await pool.execute(
+            `UPDATE email_queue SET status='Sent', sent_at=NOW(), last_error=NULL WHERE id=?`,
+            [job.id],
+          );
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.error(`Registration email delivery failed for queue item ${job.id}:`, message);
+          await pool.execute(
+            `UPDATE email_queue SET status=IF(attempts >= 3, 'Failed', 'Pending'), last_error=? WHERE id=? AND status='Failed'`,
+            [message.slice(0, 250), job.id],
+          ).catch((dbError) => console.error('Email queue error update failed:', dbError));
+        }
+      }));
+    });
+
     return NextResponse.json({ ok: true, registrationCode: code }, { status: 201 });
   } catch (e: any) {
     if (conn) {
