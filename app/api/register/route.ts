@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { randomUUID } from 'node:crypto';
 import { pool } from '@/lib/db';
 import { calculatePrice } from '@/lib/pricing';
-import { escapeHtml, sendMail } from '@/lib/mail';
+import { escapeHtml } from '@/lib/mail';
 
 export const runtime = 'nodejs';
 
@@ -39,8 +39,7 @@ function buildRegistrationEmail(data: {
         <tr><td style="height:6px;background:#ee4123;font-size:0;line-height:0">&nbsp;</td></tr>
         <tr><td style="padding:26px 30px 20px;background:#fff8f3;border-bottom:1px solid #f3e7df">
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
-            <td valign="middle" style="padding-right:12px"><img src="https://autoaiexpo.com/assets/images/AutoAI.webp" width="128" alt="Auto AI Expo" style="display:block;width:128px;max-width:100%;height:auto;border:0"></td>
-            <td align="right" valign="middle" style="font-size:11px;line-height:1.5;letter-spacing:1.2px;font-weight:bold;color:#ee4123">OFFICIAL<br><span style="letter-spacing:.5px;color:#55555d;font-weight:normal">REGISTRATION EMAIL</span></td>
+            <td align="center" valign="middle"><img src="https://autoaiexpo.com/assets/images/AutoAI.webp" width="128" alt="Auto AI Expo" style="display:block;width:128px;max-width:100%;height:auto;border:0;margin:0 auto"></td>
           </tr></table>
         </td></tr>
         <tr><td style="padding:30px 30px 8px">
@@ -190,32 +189,19 @@ export async function POST(req: NextRequest) {
       'INSERT INTO email_queue (recipient,subject,body) VALUES (?,?,?)',
       [email, 'Auto AI Expo 2027 — Registration received', contactHtml],
     );
-    const mailIds = [Number(contactMail.insertId)];
     if (process.env.ADMIN_NOTIFICATION_EMAIL) {
       const [adminMail]: any = await conn.execute(
         'INSERT INTO email_queue (recipient,subject,body) VALUES (?,?,?)',
         [process.env.ADMIN_NOTIFICATION_EMAIL, `New Auto AI Expo 2027 registration — ${code}`, adminHtml],
       );
-      mailIds.push(Number(adminMail.insertId));
     }
 
     await conn.commit();
     conn.release();
     conn = null;
 
-    // Send immediately; queued records remain available for retry if SMTP fails.
-    for (const mailId of mailIds) {
-      const [mailRows]: any = await pool.execute('SELECT id,recipient,subject,body FROM email_queue WHERE id=?', [mailId]);
-      const row = mailRows[0];
-      if (!row) continue;
-      try {
-        await sendMail(row.recipient, row.subject, row.body);
-        await pool.execute('UPDATE email_queue SET status="Sent",sent_at=NOW(),attempts=attempts+1,last_error=NULL WHERE id=?', [row.id]);
-      } catch (e) {
-        await pool.execute('UPDATE email_queue SET attempts=attempts+1,last_error=? WHERE id=?', [String(e).slice(0, 250), row.id]);
-      }
-    }
-
+    // Email records are committed to the queue. A separate scheduled worker
+    // sends them, so SMTP cannot delay the registration success response.
     return NextResponse.json({ ok: true, registrationCode: code }, { status: 201 });
   } catch (e: any) {
     if (conn) {
