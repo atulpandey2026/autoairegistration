@@ -39,7 +39,7 @@ function buildRegistrationEmail(data: {
         <tr><td style="height:6px;background:#ee4123;font-size:0;line-height:0">&nbsp;</td></tr>
         <tr><td style="padding:26px 30px 20px;background:#fff8f3;border-bottom:1px solid #f3e7df">
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
-            <td align="center" valign="middle"><img src="https://autoaiexpo.com/assets/images/AutoAI.webp" width="128" alt="Auto AI Expo" style="display:block;width:128px;max-width:100%;height:auto;border:0;margin:0 auto"></td>
+            <td align="center" valign="middle"><img src="https://autoaiexpo.com/assets/images/Auto_Ai.jpg" width="128" alt="Auto AI Expo" style="display:block;width:128px;max-width:100%;height:auto;border:0;margin:0 auto"></td>
           </tr></table>
         </td></tr>
         <tr><td style="padding:30px 30px 8px">
